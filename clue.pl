@@ -56,7 +56,7 @@ blocked((X, Y)) :- X =:= 6, Y >= 15, Y =< 17.
 % billiard room
 blocked((X, Y)) :- X =:= 0, Y >= 7, Y =< 13.
 blocked((X, Y)) :- X >= 1, X =< 5, Y >= 8, Y =< 12.
-% center
+% stairs
 blocked((X, Y)) :- X >= 9, X =< 13, Y >= 10, Y =< 16.
 
 %% valid_room(R) - R is a valid room name
