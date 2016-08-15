@@ -170,8 +170,8 @@ valid_adjacent((X, Y), (Xd, Yd)) :-
 		can_move_to((Xd, Yd)).
 closest_door_aux(Room, [(X, Y)], [(X, Y)|_], _) :- door((X, Y), Room).
 closest_door_aux(Room, [(X, Y)|PTail], [(X, Y)|QTail], Seen) :-
-		print((X, Y)),
-		print(QTail),nl,
+		% print((X, Y)),
+		% print(QTail),nl,
 		% enqueues all non-seen adjacents to which it's possible to move
 		findall((Xd, Yd), (valid_adjacent((X, Y), (Xd, Yd)), \+ member((Xd, Yd), Seen)), ValidAdjacents),
 		append(QTail, ValidAdjacents, Queue),
