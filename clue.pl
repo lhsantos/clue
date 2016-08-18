@@ -112,20 +112,6 @@ position((9, 0), 'green').
 position((0, 6), 'peacock').
 position((0, 19), 'plum').
 
-%%% The game weapons.
-
-%% valid_weapons(Weapons) - Weapons is the list of valid weapons.
-valid_weapons(
-	[
-		'rope',
-		'pipe',
-		'knife',
-		'wrench',
-		'candlestick',
-		'pistol'
-	]
-).
-
 
 %%%%% Movement logic.
 
@@ -143,21 +129,93 @@ is_free((X, Y)) :-
 
 %% closest_door((Xs, Ys), Room, Path) - starting at <Xs, Ys>, finds
 %% the closest Room door and the Path to it
-valid_adjacent((X, Y), (Xd, Yd), Seen) :-
+unseen_neighbor((X, Y), (Xd, Yd), Seen) :-
 		neighbor((X, Y), (Xd, Yd)),
-		\+ member((Xd, Yd), Seen),
+		\+ member(((Xd, Yd), _), Seen).
+valid_adjacent((X, Y), (Xd, Yd), Seen) :-
+		unseen_neighbor((X, Y), (Xd, Yd), Seen),
 		is_free((Xd, Yd)).
-closest_door_aux(Room, [(X, Y)], [(X, Y)|_], _) :- door((X, Y), Room).
-closest_door_aux(Room, [(X, Y)|PTail], [(X, Y)|QTail], Seen) :-
-		% print((X, Y)),
-		% print(QTail),nl,
+add_parent([], _, []).
+add_parent([Node|NodesTail], Parent, [(Node, Parent)|LinkedTail]) :-
+		add_parent(NodesTail, Parent, LinkedTail).
+build_path(Head, Seen, [Head]) :- member((Head, nil), Seen).
+build_path(Head, Seen, [Head|Tail]) :-
+		member((Head, Parent), Seen),
+		build_path(Parent, Seen, Tail).
+closest_door_aux(Room, Path, [Head|_], Seen) :-
+		door(Head, Room),
+		build_path(Head, Seen, InversePath),
+		reverse(InversePath, Path),
+		print(Path),nl.
+closest_door_aux(Room, Path, [(X, Y)|QTail], Seen) :-
 		% enqueues all non-seen adjacents to which it's possible to move
 		findall((Xd, Yd), valid_adjacent((X, Y), (Xd, Yd), Seen), ValidAdjacents),
-		append(QTail, ValidAdjacents, Queue),
+		append(QTail, ValidAdjacents, NewQueue),
 		% stores all adjacent nodes as seen, to cut the search recursion
-		findall((Xa, Ya), neighbor((X, Y), (Xa, Ya)), Neighbors),
-		union(Neighbors, Seen, NewSeen),
-		closest_door_aux(Room, PTail, Queue, NewSeen). % recursive definition
+		findall((Xa, Ya), unseen_neighbor((X, Y), (Xa, Ya), Seen), Neighbors),
+		add_parent(Neighbors, (X, Y), LinkedNeighbors),
+		append(LinkedNeighbors, Seen, NewSeen),
+		closest_door_aux(Room, Path, NewQueue, NewSeen). % recursive definition
 closest_door((Xs, Ys), Room, Path) :-
 		is_free((Xs, Ys)),
-		closest_door_aux(Room, Path, [(Xs, Ys)], [(Xs, Ys)]).
+		closest_door_aux(Room, Path, [(Xs, Ys)], [((Xs, Ys), nil)]).
+closest_door(SourceRoom, TargetRoom, Path) :-
+		valid_rooms(ValidRooms), member(SourceRoom, ValidRooms),
+		findall(Exit, door(Exit, SourceRoom), Exits),
+		add_parent(Exits, nil, LinkedExits),
+		closest_door_aux(TargetRoom, Path, Exits, LinkedExits).
+
+
+%%% The game weapons.
+
+%% valid_weapons(Weapons) - Weapons is the list of valid weapons.
+valid_weapons(
+	[
+		'rope',
+		'pipe',
+		'knife',
+		'wrench',
+		'candlestick',
+		'pistol'
+	]
+).
+
+%% my_char(Char) - Char is the character of this agent.
+:- dynamic my_char/1.
+
+%% shown_char(Player, Char) - the player Player (could be myself)
+%% has shown me the card for Char.
+:- dynamic shown_char/2.
+
+%% shown_room(Player, Room) - the player Player (could be myself)
+%% has shown me the card for Room.
+:- dynamic shown_room/2.
+
+%% shown_weapon(Player, Weapon) - the player Player (could be myself)
+%% has shown me the card for Weapon.
+:- dynamic shown_weapon/2.
+
+%% the next predicates generate the known and unknown lists
+%% of characters, rooms and weapons, i.e., those whose cards
+%% have and have not yet been shown so far
+known_chars(KnownChars) :- findall(C, shown_char(_, C), KnownChars).
+unknown_chars(UnknownChars) :-
+		valid_chars(ValidChars),
+		known_chars(KnownChars),
+		subtract(ValidChars, KnownChars, UnknownChars).
+known_rooms(KnownRooms) :- findall(C, shown_room(_, C), KnownRooms).
+unknown_rooms(UnknownRooms) :-
+		valid_rooms(ValidRooms),
+		known_rooms(KnownRooms),
+		subtract(ValidRooms, KnownRooms, UnknownRooms).
+known_weapons(KnownWeapons) :- findall(C, shown_weapon(_, C), KnownWeapons).		
+unknown_weapons(UnknownWeapons) :-
+		valid_weapons(ValidWeapons),
+		known_weapons(KnownWeapons),
+		subtract(ValidWeapons, KnownWeapons, UnknownWeapons).
+
+can_accuse(Person, Room, Weapon) :-
+		unknown_chars([Person]),
+		unknown_rooms([Room]),
+		unknown_weapons([Weapon]).
+

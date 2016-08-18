@@ -225,7 +225,7 @@ The following principles were observed in this implementation to make it simple:
     \item no mind reading -- the agent will not infer information from other players actions, except facts that can be logically proven; it will not try to predict how people would or should behave, however, it will assume that everyone will play strategically, \textit{e.g.}, if the player to the left has already shown a certain card before, that card will not be used on a next guess, because a smart player would keep showing the same card over and over again, even if she had a different one to show.
 \end{itemize}
 
-The sections below describe the rationale and the details of this implementation. Section \ref{sec:board} explains how the game board and the current position of each player is stored internally and how the agent finds the shortest path to a given goal. Section \ref{sec:data} describes how the knowledge acquired as the match progresses is represented, and how the game decides which action to take on each turn. Finally, Section \ref{sec:interface} brings the predicates that allow the final user to start a new game and interact with the agent.
+The sections below describe the rationale and the details of this implementation. Section \ref{sec:board} shows how the game board and the current position of each player is stored internally and how the agent finds the shortest path to a given goal. Section \ref{sec:decisions} describes how the knowledge acquired as the match progresses is represented, and how the game decides the action to take in each turn. Finally, Section \ref{sec:interface} explains the predicates that allow the final user to initialize and subsequently interact with the agent.
 
 \section{Moving on the Board}
 \label{sec:board}
@@ -260,7 +260,7 @@ The predicate \predname{door} says if a cell is an access cell, and to which roo
 
 The predicate \predname{passage} is a special case, to represent the information that there are secret passages between the rooms in the (opposite) corners of the board. As shown in Figure \ref{fig:passage}, it is implemented as a commutative operation by using an auxiliary predicate.
 
-Finally, the predicate \predname{position} informs the current position of a player. For any atom \varname{n} that is a valid player name, there will be exactly one fact that says ``the position of \varname{n} is \varname{(X, Y)}''. The agent makes sure this holds true by defining the start position shown on the board once (Figure \ref{fig:start-positions}), and \textit{retracting} and \textit{asserting} that position any time a player's position changes, as will be explained on Section \ref{sec:data}. When a player enters a room, her position becomes that room's name.
+Finally, the predicate \predname{position} informs the current position of a player. For any atom \varname{n} that is a valid player name, there will be exactly one fact that says ``the position of \varname{n} is \varname{(X, Y)}''. The agent makes sure this holds true by defining the start position shown on the board once (Figure \ref{fig:start-positions}), and \textit{retracting} and \textit{asserting} that position any time a player's position changes, as will be explained on Section \ref{sec:decisions}. When a player enters a room, her position becomes that room's name.
 
 Other restrictions, such as the board boundaries, are checked on the path finding algorithm, as described on the next section.
 
@@ -413,29 +413,210 @@ The base case for this predicate is when the head of the queue is a door. If tha
 \begin{lstlisting}[style=Prolog-pygsty]
 %% closest_door((Xs, Ys), Room, Path) - starting at <Xs, Ys>, finds
 %% the closest Room door and the Path to it
-valid_adjacent((X, Y), (Xd, Yd), Seen) :-
+unseen_neighbor((X, Y), (Xd, Yd), Seen) :-
 		neighbor((X, Y), (Xd, Yd)),
-		\+ member((Xd, Yd), Seen),
+		\+ member((Xd, Yd), Seen).
+valid_adjacent((X, Y), (Xd, Yd), Seen) :-
+		unseen_neighbor((X, Y), (Xd, Yd), Seen),
 		is_free((Xd, Yd)).
-closest_door_aux(Room, [(X, Y)], [(X, Y)|_], _) :- door((X, Y), Room).
+closest_door_aux(Room, [Head], [Head|_], _) :- door(Head, Room).
 closest_door_aux(Room, [(X, Y)|PTail], [(X, Y)|QTail], Seen) :-
 		% enqueues all non-seen adjacents to which it's possible to move
 		findall((Xd, Yd), valid_adjacent((X, Y), (Xd, Yd), Seen), ValidAdjacents),
-		append(QTail, ValidAdjacents, Queue),
+		append(QTail, ValidAdjacents, NewQueue),
 		% stores all adjacent nodes as seen, to cut the search recursion
-		findall((Xa, Ya), neighbor((X, Y), (Xa, Ya)), Neighbors),
-		union(Neighbors, Seen, NewSeen),
-		closest_door_aux(Room, PTail, Queue, NewSeen). % recursive definition
+		findall((Xa, Ya), unseen_neighbor((X, Y), (Xa, Ya), Seen), Neighbors),
+		append(Neighbors, Seen, NewSeen),
+		closest_door_aux(Room, PTail, NewQueue, NewSeen). % recursive definition
 closest_door((Xs, Ys), Room, Path) :-
 		is_free((Xs, Ys)),
 		closest_door_aux(Room, Path, [(Xs, Ys)], [(Xs, Ys)]).
 \end{lstlisting}
-	\caption{The breadth-first search used to navigate on the map.} 
+	\caption{The breadth-first search used to find the closest door, given a source cell.} 
 	\label{fig:bfs}
 \end{figure}
 
-\section{Representing Knowledge}
+Even though this algorithm finds the path between two cells on the board, the agent actually needs to solve the more general problem of finding the closest doors when departing from multiple source cells. That's because, if the agent is inside a room, there could be multiple exits to choose from, thus, it should find the best option taking into account all these exits.
+
+The na\"{i}ve approach would be to find lists with all the paths for each exit, merge these lists while ordering the elements (paths) by length and, finally, traverse the result. However, that solution is both inefficient and \textit{imperative}, in the sense that it tells the steps to solve the problem, instead of taking advantage of the declarative paradigm.
+
+What happens if the queue in the previous solution is initialized with multiple source cells, instead of just one?
+\begin{itemize}
+    \item when the first element of the queue is inspected, all its adjacent nodes will be enqueued \textbf{after} all the other sources, which are currently on the queue (as long as those adjacent nodes aren't sources themselves);
+    
+    \item when the next element is inspected (another source), once again, all its \textit{not already on the queue} adjacents will also be enqueued;
+    
+    \item after all the sources nodes are inspected first, the next element to be inspected is exactly one step away from one of the sources; actually, all the elements that are exactly one step away from at least one of the sources will be inspected next, and their adjcent nodes will be enqueued;
+    
+    \item by analogy, all the elements that are exactly two steps away from \textbf{at least one} of the sources will be analyzed next, and so on...
+\end{itemize}
+
+Ergo, it's possible to conclude that, just by initializing the queue with the multiple sources, the order in which the elements are inspected still ensures that doors are searched \textit{breadth-first} and, as a consequence, the doors are found in order, from the closest to the farthest, only now the distance applies to any one of the possible sources.
+
+There's one problem though: in the previous algorithm, since there was only one source, the path could be rebuilt implicitly within the backtracking mechanism. The base of the recursion was the door, and the recursive steps would attach one cell to the head of the resulting list, until the caller of the predicate would have the whole path ready. With multiple sources, however, it's necessary to explicitly store, for each cell that is reached, that cell's parent, \textit{i.e.}, the cell \textit{from which} it was reached.
+
+Figure \ref{fig:bfs-ms} shows the new version of the algorithm that includes these changes. Now, the \varname{Seen} set elements are tuples \varname{(Cell, Parent)} that store not only the coordinate of the cells that were already seen, but also their parent (which can be the coordinates of a previously seen cell or \varname{nil} for the source cells). All predicates were updated to handle this new representation.
+
+The auxiliary predicate \predprot{add\_parent}{3} simply receives a list \varname{Nodes} and an element \varname{Parent} and generates a new list with each element \varname{N} of \varname{Nodes} in a tuple \varname{(N, Parent)}.
+
+Finally, the new recursive predicate \predprot{build\_path}{3} is used to explicitly rebuild the path when a door is reached, given the set of seen nodes (and their parents). The predicate inspects the \varname{Head} element using the \varname{Seen} set and generates the \varname{Path} as a list; the base case happens when the parent of \varname{Head} is \varname{nil}, which generates the unitary list; the recursive case adds \varname{Head} to the list and inspects its non-nil parent. Since this predicate is called when a door is found, the path is actually generated in the reverse order, so the resulting list is reversed before being returned to the original caller.
+
+\begin{figure}[H]
+	\centering
+\begin{lstlisting}[style=Prolog-pygsty]
+%% closest_door((Xs, Ys), Room, Path) - starting at <Xs, Ys>, finds
+%% the closest Room door and the Path to it
+unseen_neighbor((X, Y), (Xd, Yd), Seen) :-
+		neighbor((X, Y), (Xd, Yd)),
+		\+ member(((Xd, Yd), _), Seen).
+valid_adjacent((X, Y), (Xd, Yd), Seen) :-
+		unseen_neighbor((X, Y), (Xd, Yd), Seen),
+		is_free((Xd, Yd)).
+add_parent([], _, []).
+add_parent([Node|NodesTail], Parent, [(Node, Parent)|LinkedTail]) :-
+		add_parent(NodesTail, Parent, LinkedTail).
+build_path(Head, Seen, [Head]) :- member((Head, nil), Seen).
+build_path(Head, Seen, [Head|Tail]) :-
+		member((Head, Parent), Seen),
+		build_path(Parent, Seen, Tail).
+closest_door_aux(Room, Path, [Head|_], Seen) :-
+		door(Head, Room),
+		build_path(Head, Seen, InversePath),
+		reverse(InversePath, Path),
+		print(Path),nl.
+closest_door_aux(Room, Path, [(X, Y)|QTail], Seen) :-
+		% enqueues all non-seen adjacents to which it's possible to move
+		findall((Xd, Yd), valid_adjacent((X, Y), (Xd, Yd), Seen), ValidAdjacents),
+		append(QTail, ValidAdjacents, NewQueue),
+		% stores all adjacent nodes as seen, to cut the search recursion
+		findall((Xa, Ya), unseen_neighbor((X, Y), (Xa, Ya), Seen), Neighbors),
+		add_parent(Neighbors, (X, Y), LinkedNeighbors),
+		append(LinkedNeighbors, Seen, NewSeen),
+		closest_door_aux(Room, Path, NewQueue, NewSeen). % recursive definition
+closest_door((Xs, Ys), Room, Path) :-
+		is_free((Xs, Ys)),
+		closest_door_aux(Room, Path, [(Xs, Ys)], [((Xs, Ys), nil)]).
+closest_door(SourceRoom, TargetRoom, Path) :-
+		valid_rooms(ValidRooms), member(SourceRoom, ValidRooms),
+		findall(Exit, door(Exit, SourceRoom), Exits),
+		add_parent(Exits, nil, LinkedExits),
+		closest_door_aux(TargetRoom, Path, Exits, LinkedExits).
+\end{lstlisting}
+	\caption{The breadth-first search used to find the closest door, given multiple source cells.} 
+	\label{fig:bfs-ms}
+\end{figure}
+
+\section{Making Decisions}
+\label{sec:decisions}
+
+This section describes how the agent represents knowledge about the game internally (Section \ref{sec:data}), and how it then uses that knowledge to make decisions in each turn (Section \ref{sec:actions}).
+
+\subsection{Representing the Game Data}
 \label{sec:data}
+
+The first necessary data to represent internally are the lists of valid rooms, characters and weapons. These (static) lists are initialized with the predicates in Figure \ref{fig:valid-cards} and used throughout the code. For simplicity, no (physical) player name is stored, instead, all players are referenced by their character's name. The list of valid characters is declared in the order that those characters would play, according to the rules. The agent's own character is represented by the dynamic predicate \predprot{my\_char}{1}, that is set once when a match starts.
+
+\begin{figure}[H]
+	\centering
+\begin{lstlisting}[style=Prolog-pygsty]
+%% valid_rooms(Rooms) - Rooms is the list of valid room names.
+valid_rooms(
+	[
+		'conservatory',
+		'ball room',
+		'kitchen',
+		'dining room',
+		'lounge',
+		'hall',
+		'study',
+		'library',
+		'billiard room'
+	]
+).
+
+%% valid_chars(Chars) - Chars is the list of valid characters,
+%% in the order they must play.
+valid_chars(
+	[
+		'scarlet',
+		'mustard',
+		'white',
+		'green',
+		'peacock',
+		'plum'
+	]
+).
+
+%% valid_weapons(Weapons) - Weapons is the list of valid weapons.
+valid_weapons(
+	[
+		'rope',
+		'pipe',
+		'knife',
+		'wrench',
+		'candlestick',
+		'pistol'
+	]
+).
+
+%% my_char(Char) - Char is the character of this agent.
+:- dynamic my_char/1.
+\end{lstlisting}
+	\caption{The lists of rooms, characters and weapons in the game; and the current player's char.} 
+	\label{fig:valid-cards}
+\end{figure}
+
+Next, an important information required by the agent to make a move is ``which cards have I seen?''. To win the game, a player uses a very simple elimination process: the total number of cards is known for each category -- room, character and weapon;  there's exactly one card of each in the ``confidential'' envelope; if, for any of those, only a single card has not yet been seen, then it's logical that it must be on the envelope.
+
+Figure \ref{fig:shown-cards} shows the very straightforward predicates that represent the information of which cards have been shown, and by which player. This last information is necessary for the decision step described later. Notice that the player who has shown the card might be the agent itself, meaning that the card is on its hands.
+
+The predicate \predprot{can\_accuse}{3} is true if the agent currently knows all the necessary information to make an accusation. It's trivially defined as the case when the unknown rooms, characters and weapons lists are all unitary.
+
+\begin{figure}[H]
+	\centering
+\begin{lstlisting}[style=Prolog-pygsty]
+%% shown_char(Player, Char) - the player Player (could be myself)
+%% has shown me the card for Char.
+:- dynamic shown_char/2.
+
+%% shown_room(Player, Room) - the player Player (could be myself)
+%% has shown me the card for Room.
+:- dynamic shown_room/2.
+
+%% shown_weapon(Player, Weapon) - the player Player (could be myself)
+%% has shown me the card for Weapon.
+:- dynamic shown_weapon/2.
+
+%% the next predicates generate the known and unknown lists
+%% of characters, rooms and weapons, i.e., those whose cards
+%% have and have not yet been shown so far
+known_chars(KnownChars) :- findall(C, shown_char(_, C), KnownChars).
+unknown_chars(UnknownChars) :-
+		valid_chars(ValidChars),
+		known_chars(KnownChars),
+		subtract(ValidChars, KnownChars, UnknownChars).
+known_rooms(KnownRooms) :- findall(C, shown_room(_, C), KnownRooms).
+unknown_rooms(UnknownRooms) :-
+		valid_rooms(ValidRooms),
+		known_rooms(KnownRooms),
+		subtract(ValidRooms, KnownRooms, UnknownRooms).
+known_weapons(KnownWeapons) :- findall(C, shown_weapon(_, C), KnownWeapons).		
+unknown_weapons(UnknownWeapons) :-
+		valid_weapons(ValidWeapons),
+		known_weapons(KnownWeapons),
+		subtract(ValidWeapons, KnownWeapons, UnknownWeapons).
+
+can_accuse(Person, Room, Weapon) :-
+		unknown_chars([Person]),
+		unknown_rooms([Room]),
+		unknown_weapons([Weapon]).
+\end{lstlisting}
+	\caption{Representing which cards were shown, by whom.} 
+	\label{fig:shown-cards}
+\end{figure}
+
+\subsection{Picking Actions}
+\label{sec:actions}
 
 \section{The Interface}
 \label{sec:interface}
