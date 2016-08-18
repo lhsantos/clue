@@ -482,8 +482,7 @@ build_path(Head, Seen, [Head|Tail]) :-
 closest_door_aux(Room, Path, [Head|_], Seen) :-
 		door(Head, Room),
 		build_path(Head, Seen, InversePath),
-		reverse(InversePath, Path),
-		print(Path),nl.
+		reverse(InversePath, Path).
 closest_door_aux(Room, Path, [(X, Y)|QTail], Seen) :-
 		% enqueues all non-seen adjacents to which it's possible to move
 		findall((Xd, Yd), valid_adjacent((X, Y), (Xd, Yd), Seen), ValidAdjacents),
