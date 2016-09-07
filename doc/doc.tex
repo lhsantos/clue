@@ -11,13 +11,18 @@
 \usepackage[usenames,dvipsnames]{xcolor}
 \usepackage{listings}
 \usepackage{textcomp}
-
+\usepackage[]{algorithm2e}
+\usepackage{tikz,forest}
+\usetikzlibrary{arrows.meta}
+\usepackage{datetime}
+\newdateformat{monthyeardate}{%
+  \monthname[\THEMONTH], \THEYEAR}
 
 \renewcommand{\familydefault}{\sfdefault}
 
 \title{Clue in Prolog\\{\Large -- A Didactic Example --}}
 \author{Luciano Santos}
-\date{August 2016}
+\date{\monthyeardate\today}
 
 \newcommand{\varname}[1]{\texttt{#1}}
 \newcommand{\varnameit}[1]{\textit{\texttt{#1}}}
@@ -26,6 +31,12 @@
 
 \newcommand{\predprot}[2]{{\color{MidnightBlue}\varnamebf{#1}}/{\color{Mulberry}\varname{#2}}}
 \newcommand{\predname}[1]{{\color{MidnightBlue}\varname{#1}}}
+\newcommand{\And}{\textbf{and}}
+\newcommand{\Not}{\textbf{not}}
+
+\newtheorem{definition}{Definition}[section]
+\newtheorem{constraint}{Constraint}[section]
+
 
 % --- ugly internals for language definition ---
 % see: http://tex.stackexchange.com/questions/161235/can-the-listings-package-be-set-up-to-highlight-prolog-code-like-minted-does
@@ -239,9 +250,9 @@ The game board is seen internally as a grid of size $24\times25$. As illustrated
 	\label{fig:board-grid}
 \end{figure}
 
-\subsection{Restrictions}
+\subsection{Constraints}
 
-The following predicates describe the restrictions that affect movements inside the board:
+The following predicates describe the constraints that affect movements inside the board:
 \begin{itemize}
     \item \predprot{blocked}{1} -- is true for the tuple \varname{(X, Y)} if it represents a location that is blocked, \textit{i.e.}, it's inside a room or in a wall;
     
@@ -260,11 +271,154 @@ The predicate \predname{door} says if a cell is an access cell, and to which roo
 
 The predicate \predname{passage} is a special case, to represent the information that there are secret passages between the rooms in the (opposite) corners of the board. As shown in Figure \ref{fig:passage}, it is implemented as a commutative operation by using an auxiliary predicate.
 
-Finally, the predicate \predname{position} informs the current position of a player. For any atom \varname{n} that is a valid player name, there will be exactly one fact that says ``the position of \varname{n} is \varname{(X, Y)}''. The agent makes sure this holds true by defining the start position shown on the board once (Figure \ref{fig:start-positions}), and \textit{retracting} and \textit{asserting} that position any time a player's position changes, as will be explained on Section \ref{sec:decisions}. When a player enters a room, her position becomes that room's name.
+Finally, the predicates \predname{position} and \predname{last\_position} (this one will be used later) inform the current and the last turn's position of a player, respectively. For any atom \varname{n} that is a valid player name, there will be exactly one fact that says ``the position of \varname{n} is \varname{(X, Y)}''. The agent makes sure this holds true by defining the start position shown on the board once (Figure \ref{fig:start-positions}), and \textit{retracting} and \textit{asserting} that position any time a player's position changes, as will be explained on Section \ref{sec:decisions}. When a player enters a room, her position becomes that room's name.
 
-Other restrictions, such as the board boundaries, are checked on the path finding algorithm, as described on the next section.
+Other constraints, such as the board boundaries, are checked on the path finding algorithm, as described on the next section.
 
-\begin{figure}[hb]
+\subsection{Path Finding}
+
+One of the key actions the agent must perform is movement. The first step necessary to move on the board is to answer the question: ``where can I go from my current position?''. If the player is in a cell adjacent to a door, she can enter the room; if she is in a corner room, she could use a secret passage. However, to get to the point where she could enter a room, the player must first reach a door, and using a secret passage is a trivial action. Thus, right now, only the problem of moving from a free cell to another free cell will be addressed. In order to solve that problem, the agent must determine the shortest path between two points.
+
+As the game rules state, if the player is currently in any given cell, she can only move to another empty cell vertically or horizontally. To express that relationship, the predicate \predprot{neighbor}{2} is defined (Figure \ref{fig:neighbor}). It will be true for points \varname{(Xs, Ys)}, \varname{(Xn, Yn)} if \varname{(Xn, Yn)} is exactly one cell away from \varname{(Xs, Ys)}, moving either vertically or horizontally (but not both).
+
+\begin{figure}[H]
+	\centering
+\begin{lstlisting}[style=Prolog-pygsty]
+%% neighbor((Xs, Ys), (Xn, Yn)) - <Xn, Yn> is neighbor of <Xs, Ys>.
+neighbor((Xs, Ys), (Right, Ys)) :- Right is Xs + 1.
+neighbor((Xs, Ys), (Left, Ys)) :- Left is Xs - 1.
+neighbor((Xs, Ys), (Xs, Up)) :- Up is Ys + 1.
+neighbor((Xs, Ys), (Xs, Down)) :- Down is Ys - 1.
+\end{lstlisting}
+	\caption{The declaration of the predicate \predname{neighbor}.} 
+	\label{fig:neighbor}
+\end{figure}
+
+Now, besides checking if a certain cell is a neighbor, it must also be possible to actually move there, \textit{i.e.}, it must be inside the boundaries of the board and not occupied by any other player or blocked, as previously defined. All theses cases are summarized by the predicate \predprot{is\_free}{1}, shown in Figure \ref{fig:is-free}.
+
+\begin{figure}[H]
+	\centering
+\begin{lstlisting}[style=Prolog-pygsty]
+%% is_free((X, Y)) - the position <X, Y> can bee occupied by a character.
+is_free((X, Y)) :-
+		X >= 0, X =< 23, Y >= 0, Y =< 24, % inside the board
+		\+ position((X, Y), _), % not currently occupied by anyone
+		\+ blocked((X, Y)). % not a room or a wall
+\end{lstlisting}
+	\caption{The declaration of the predicate \predname{is\_free}.} 
+	\label{fig:is-free}
+\end{figure}
+
+Once all the constraints on movement between two adjacent cells have been represented, it's possible to implement the algorithm to find the shortest path between two points on the map, if such a path exists. More precisely, the algorithm here implemented finds the shortest path between a given free cell \varname{(Xs, Ys)} and the closest door. Subsequent backtracking on the predicate will return all the doors of the board, ascendingly ordered by path length.
+
+The simplest way to tackle this task is using BFS (Breadth-first Search). The idea is simple: inspect the source node; then all the nodes exactly 1 step away from the source node; then all the nodes exactly 2 steps away from the source node; and so on. This ensures that, if a path exists, it will be found and will be a shortest path. If the backtracking mechanism continues from the state where it found a path, the next door found will have the next shortest path.
+
+To make sure that the nodes are inspected in the correct order, a queue is used. This queue begins with the source node. At each iteration, the node at the head of the queue is removed and inspected. If it's not a door, then its adjacent nodes are enqueued and the search continues. To prevent the search from recursing infinitely, it's necessary to keep a set of all nodes seen so far, so only adjacent nodes not yet inspected are enqueued.
+
+Notice that this algorithm and the way the constraints are defined respect the game rules that state \textit{``you must not enter or land on a square that's already occupied''}, \textit{``you may not [...] enter the same square twice on the same turn''}, \textit{``you may not pass through a door that's blocked by an opponent's character''} and \textit{``when you pass through a door, do not count the doorway itself as space''}. This derives from the facts that every player's positions are considered blocked cells, that BFS never moves to a previously seen cell and that doors are represented by the only cell that gives access to them, and it's necessary and sufficient to reach them to enter a room.
+
+The code for this search algorithm is shown in Figure \ref{fig:bfs}. The predicate \predprot{closest\_door}{3} receives a source point and unifies the name of the room with the closest door and the path to that door as a list of points. This predicate itself only sets up the initial values for the algorithm -- the queue and the ``seen nodes'' set are both initialized to a unitary list containing the source point -- and calls the auxiliary predicate \predprot{closets\_door\_aux}{4} to actually perform the search.
+
+The base case for this predicate is when the head of the queue is a door. If that happens, it will unify to the found door's room and the path is a unitary list containing just the door. The recursive step will extract the head of the queue, enqueue all adjacent cells that are free and have not yet been seen (described by \predprot{valid\_adjacent}{3}), mark all the neighbor cells are seen, and recursively continue walking on the list. As the recursive calls return, the path is built by inserting the inspected node on the head of the result list.
+
+\begin{figure}[H]
+	\centering
+\begin{lstlisting}[style=Prolog-pygsty]
+%% closest_door((Xs, Ys), Room, Path) - starting at <Xs, Ys>, finds
+%% the closest Room door and the Path to it
+unseen_neighbor((X, Y), (Xd, Yd), Seen) :-
+		neighbor((X, Y), (Xd, Yd)),
+		\+ member((Xd, Yd), Seen).
+valid_adjacent((X, Y), (Xd, Yd), Seen) :-
+		unseen_neighbor((X, Y), (Xd, Yd), Seen),
+		is_free((Xd, Yd)).
+closest_door_aux(Room, [Head], [Head|_], _) :- door(Head, Room).
+closest_door_aux(Room, [(X, Y)|PTail], [(X, Y)|QTail], Seen) :-
+		% enqueues all non-seen adjacents to which it's possible to move
+		findall((Xd, Yd), valid_adjacent((X, Y), (Xd, Yd), Seen), ValidAdjacents),
+		append(QTail, ValidAdjacents, NewQueue),
+		% stores all adjacent nodes as seen, to cut the search recursion
+		findall((Xa, Ya), unseen_neighbor((X, Y), (Xa, Ya), Seen), Neighbors),
+		append(Neighbors, Seen, NewSeen),
+		closest_door_aux(Room, PTail, NewQueue, NewSeen). % recursive definition
+closest_door((Xs, Ys), Room, Path) :-
+		closest_door_aux(Room, Path, [(Xs, Ys)], [(Xs, Ys)]).
+\end{lstlisting}
+	\caption{The breadth-first search used to find the closest door, given a source cell.} 
+	\label{fig:bfs}
+\end{figure}
+
+Even though this algorithm finds the path between two cells on the board, the agent actually needs to solve the more general problem of finding the closest doors when departing from multiple source cells. That's because, if the agent is inside a room, there could be multiple exits to choose from, thus, it should find the best option taking into account all these exits.
+
+The na\"{i}ve approach would be to find lists with all the paths for each exit, merge these lists while ordering the elements (paths) by length and, finally, traverse the result. However, that solution is both inefficient and \textit{imperative}, in the sense that it tells the steps to solve the problem, instead of taking advantage of the declarative paradigm.
+
+What happens if the queue in the previous solution is initialized with multiple source cells, instead of just one?
+\begin{itemize}
+    \item when the first element of the queue is inspected, all its adjacent nodes will be enqueued \textbf{after} all the other sources, which are currently on the queue (as long as those adjacent nodes aren't sources themselves);
+    
+    \item when the next element is inspected (another source), once again, all its \textit{not already on the queue} adjacents will also be enqueued;
+    
+    \item after all the sources nodes are inspected first, the next element to be inspected is exactly one step away from one of the sources; actually, all the elements that are exactly one step away from at least one of the sources will be inspected next, and their adjcent nodes will be enqueued;
+    
+    \item by analogy, all the elements that are exactly two steps away from \textbf{at least one} of the sources will be analyzed next, and so on...
+\end{itemize}
+
+Ergo, it's possible to conclude that, just by initializing the queue with the multiple sources, the order in which the elements are inspected still ensures that doors are searched \textit{breadth-first} and, as a consequence, the doors are found in order, from the closest to the farthest, only now the distance applies to any one of the possible sources.
+
+There's one problem though: in the previous algorithm, since there was only one source, the path could be rebuilt implicitly within the backtracking mechanism. The base of the recursion was the door, and the recursive steps would attach one cell to the head of the resulting list, until the caller of the predicate would have the whole path ready. With multiple sources, however, it's necessary to explicitly store, for each cell that is reached, that cell's parent, \textit{i.e.}, the cell \textit{from which} it was reached.
+
+\begin{figure}[H]
+	\centering
+\begin{lstlisting}[style=Prolog-pygsty]
+%% closest_door((Xs, Ys), Room, Path) - starting at <Xs, Ys>, finds
+%% the closest Room door and the Path to it
+unseen_neighbor((X, Y), (Xd, Yd), Seen) :-
+		neighbor((X, Y), (Xd, Yd)),
+		\+ member(((Xd, Yd), _), Seen).
+valid_adjacent((X, Y), (Xd, Yd), Seen) :-
+		unseen_neighbor((X, Y), (Xd, Yd), Seen),
+		is_free((Xd, Yd)).
+add_parent([], _, []).
+add_parent([Node|NodesTail], Parent, [(Node, Parent)|LinkedTail]) :-
+		add_parent(NodesTail, Parent, LinkedTail).
+build_path(Head, Seen, [Head]) :- member((Head, nil), Seen).
+build_path(Head, Seen, [Head|Tail]) :-
+		member((Head, Parent), Seen),
+		build_path(Parent, Seen, Tail).
+closest_door_aux(Room, Path, [Head|_], Seen) :-
+		door(Head, Room),
+		build_path(Head, Seen, InversePath),
+		reverse(InversePath, Path),
+		print(Path),nl.
+closest_door_aux(Room, Path, [(X, Y)|QTail], Seen) :-
+		% enqueues all non-seen adjacents to which it's possible to move
+		findall((Xd, Yd), valid_adjacent((X, Y), (Xd, Yd), Seen), ValidAdjacents),
+		append(QTail, ValidAdjacents, NewQueue),
+		% stores all adjacent nodes as seen, to cut the search recursion
+		findall((Xa, Ya), unseen_neighbor((X, Y), (Xa, Ya), Seen), Neighbors),
+		add_parent(Neighbors, (X, Y), LinkedNeighbors),
+		append(LinkedNeighbors, Seen, NewSeen),
+		closest_door_aux(Room, Path, NewQueue, NewSeen). % recursive definition
+closest_door((Xs, Ys), Room, Path) :-
+		closest_door_aux(Room, Path, [(Xs, Ys)], [((Xs, Ys), nil)]).
+closest_door(SourceRoom, TargetRoom, Path) :-
+		valid_rooms(ValidRooms), member(SourceRoom, ValidRooms),
+		findall(Exit, door(Exit, SourceRoom), Exits),
+		add_parent(Exits, nil, LinkedExits),
+		closest_door_aux(TargetRoom, Path, Exits, LinkedExits).
+\end{lstlisting}
+	\caption{The breadth-first search used to find the closest door, given multiple source cells.} 
+	\label{fig:bfs-ms}
+\end{figure}
+
+Figure \ref{fig:bfs-ms} shows the new version of the algorithm that includes these changes. Now, the \varname{Seen} set elements are tuples \varname{(Cell, Parent)} that store not only the coordinate of the cells that were already seen, but also their parent (which can be the coordinates of a previously seen cell or \varname{nil} for the source cells). All predicates were updated to handle this new representation.
+
+The auxiliary predicate \predprot{add\_parent}{3} simply receives a list \varname{Nodes} and an element \varname{Parent} and generates a new list with each element \varname{N} of \varname{Nodes} in a tuple \varname{(N, Parent)}.
+
+Finally, the new recursive predicate \predprot{build\_path}{3} is used to explicitly rebuild the path when a door is reached, given the set of seen nodes (and their parents). The predicate inspects the \varname{Head} element using the \varname{Seen} set and generates the \varname{Path} as a list; the base case happens when the parent of \varname{Head} is \varname{nil}, which generates the unitary list; the recursive case adds \varname{Head} to the list and inspects its non-nil parent. Since this predicate is called when a door is found, the path is actually generated in the reverse order, so the resulting list is reversed before being returned to the original caller.
+
+
+\begin{figure}[H]
 	\centering
 \begin{lstlisting}[style=Prolog-pygsty]
 %% blocked((X, Y)) - point <X, Y> is inside a room or is a wall
@@ -306,7 +460,7 @@ blocked((X, Y)) :- X >= 9, X =< 13, Y >= 10, Y =< 16.
 	\label{fig:blocked}
 \end{figure}
 
-\begin{figure}[hb]
+\begin{figure}[H]
 	\centering
 \begin{lstlisting}[style=Prolog-pygsty]
 %% door((X, Y), R) - there's a door to room R from point <X, Y>
@@ -332,7 +486,7 @@ door((6, 9), 'billiard room').
 	\label{fig:door}
 \end{figure}
 
-\begin{figure}[hb]
+\begin{figure}[H]
 	\centering
 \begin{lstlisting}[style=Prolog-pygsty]
 %% passage(Src, Dst) - there's a passage from Src to Dst
@@ -344,7 +498,7 @@ passage(Src, Dst) :- passage_aux(Src, Dst) ; passage_aux(Dst, Src).
 	\label{fig:passage}
 \end{figure}
 
-\begin{figure}[hb]
+\begin{figure}[H]
 	\centering
 \begin{lstlisting}[style=Prolog-pygsty]
 %% position((X, Y), C) - the current position of character C is <X, Y>
@@ -359,150 +513,20 @@ position((14, 0), 'white').
 position((9, 0), 'green').
 position((0, 6), 'peacock').
 position((0, 19), 'plum').
+
+%% last_position((X, Y), C) - the position of character C was <X, Y> last turn.
+%% it'll be updated as the script's own character moves or it receives
+%% information that another character moved.
+:- dynamic last_position/2.
+last_position(nil, 'scarlet').
+last_position(nil, 'mustard').
+last_position(nil, 'white').
+last_position(nil, 'green').
+last_position(nil, 'peacock').
+last_position(nil, 'plum').
 \end{lstlisting}
 	\caption{The declaration of the predicate \predname{position} and the initial position of all players.} 
 	\label{fig:start-positions}
-\end{figure}
-
-\subsection{Path Finding}
-
-One of the key actions the agent must perform is movement. The first step necessary to move on the board is to answer the question: ``where can I go from my current position?''. If the player is in a cell adjacent to a door, she can enter the room; if she is in a corner room, she could use a secret passage. However, to get to the point where she could enter a room, the player must first reach a door, and using a secret passage is a trivial action. Thus, right now, only the problem of moving from a free cell to another free cell will be addressed. In order to solve that problem, the agent must determine the shortest path between two points.
-
-As the game rules state, if the player is currently in any given cell, she can only move to another empty cell vertically or horizontally. To express that relationship, the predicate \predprot{neighbor}{2} is defined (Figure \ref{fig:neighbor}). It will be true for points \varname{(Xs, Ys)}, \varname{(Xn, Yn)} if \varname{(Xn, Yn)} is exactly one cell away from \varname{(Xs, Ys)}, moving either vertically or horizontally (but not both).
-
-\begin{figure}[H]
-	\centering
-\begin{lstlisting}[style=Prolog-pygsty]
-%% neighbor((Xs, Ys), (Xn, Yn)) - <Xn, Yn> is neighbor of <Xs, Ys>.
-neighbor((Xs, Ys), (Right, Ys)) :- Right is Xs + 1.
-neighbor((Xs, Ys), (Left, Ys)) :- Left is Xs - 1.
-neighbor((Xs, Ys), (Xs, Up)) :- Up is Ys + 1.
-neighbor((Xs, Ys), (Xs, Down)) :- Down is Ys - 1.
-\end{lstlisting}
-	\caption{The declaration of the predicate \predname{neighbor}.} 
-	\label{fig:neighbor}
-\end{figure}
-
-Now, besides checking if a certain cell is a neighbor, it must also be possible to actually move there, \textit{i.e.}, it must be inside the boundaries of the board and not occupied by any other player or blocked, as previously defined. All theses cases are summarized by the predicate \predprot{is\_free}{1}, shown in Figure \ref{fig:is-free}.
-
-\begin{figure}[H]
-	\centering
-\begin{lstlisting}[style=Prolog-pygsty]
-%% is_free((X, Y)) - the position <X, Y> can bee occupied by a character.
-is_free((X, Y)) :-
-		X >= 0, X =< 23, Y >= 0, Y =< 24, % inside the board
-		\+ position((X, Y), _), % not currently occupied by anyone
-		\+ blocked((X, Y)). % not a room or a wall
-\end{lstlisting}
-	\caption{The declaration of the predicate \predname{is\_free}.} 
-	\label{fig:is-free}
-\end{figure}
-
-Once all the restrictions on movement between two adjacent cells have been represented, it's possible to implement the algorithm to find the shortest path between two points on the map, if such a path exists. More precisely, the algorithm here implemented finds the shortest path between a given free cell \varname{(Xs, Ys)} and the closest door. Subsequent backtracking on the predicate will return all the doors of the board, ascendingly ordered by path length.
-
-The simplest way to tackle this task is using BFS (Breadth-first Search). The idea is simple: inspect the source node; then all the nodes exactly 1 step away from the source node; then all the nodes exactly 2 steps away from the source node; and so on. This ensures that, if a path exists, it will be found and will be a shortest path. If the backtracking mechanism continues from the state where it found a path, the next door found will have the next shortest path.
-
-To make sure that the nodes are inspected in the correct order, a queue is used. This queue begins with the source node. At each iteration, the node at the head of the queue is removed and inspected. If it's not a door, then its adjacent nodes are enqueued and the search continues. To prevent the search from recursing infinitely, it's necessary to keep a set of all nodes seen so far, so only adjacent nodes not yet inspected are enqueued.
-
-The code for this search algorithm is shown in Figure \ref{fig:bfs}. The predicate \predprot{closest\_door}{3} receives a source point and unifies the name of the room with the closest door and the path to that door as a list of points. This predicate itself only sets up the initial values for the algorithm -- the queue and the ``seen nodes'' set are both initialized to a unitary list containing the source point -- and calls the auxiliary predicate \predprot{closets\_door\_aux}{4} to actually perform the search.
-
-The base case for this predicate is when the head of the queue is a door. If that happens, it will unify to the found door's room and the path is a unitary list containing just the door. The recursive step will extract the head of the queue, enqueue all adjacent cells that are free and have not yet been seen (described by \predprot{valid\_adjacent}{3}), mark all the neighbor cells are seen, and recursively continue walking on the list. As the recursive calls return, the path is built by inserting the inspected node on the head of the result list.
-
-\begin{figure}[H]
-	\centering
-\begin{lstlisting}[style=Prolog-pygsty]
-%% closest_door((Xs, Ys), Room, Path) - starting at <Xs, Ys>, finds
-%% the closest Room door and the Path to it
-unseen_neighbor((X, Y), (Xd, Yd), Seen) :-
-		neighbor((X, Y), (Xd, Yd)),
-		\+ member((Xd, Yd), Seen).
-valid_adjacent((X, Y), (Xd, Yd), Seen) :-
-		unseen_neighbor((X, Y), (Xd, Yd), Seen),
-		is_free((Xd, Yd)).
-closest_door_aux(Room, [Head], [Head|_], _) :- door(Head, Room).
-closest_door_aux(Room, [(X, Y)|PTail], [(X, Y)|QTail], Seen) :-
-		% enqueues all non-seen adjacents to which it's possible to move
-		findall((Xd, Yd), valid_adjacent((X, Y), (Xd, Yd), Seen), ValidAdjacents),
-		append(QTail, ValidAdjacents, NewQueue),
-		% stores all adjacent nodes as seen, to cut the search recursion
-		findall((Xa, Ya), unseen_neighbor((X, Y), (Xa, Ya), Seen), Neighbors),
-		append(Neighbors, Seen, NewSeen),
-		closest_door_aux(Room, PTail, NewQueue, NewSeen). % recursive definition
-closest_door((Xs, Ys), Room, Path) :-
-		is_free((Xs, Ys)),
-		closest_door_aux(Room, Path, [(Xs, Ys)], [(Xs, Ys)]).
-\end{lstlisting}
-	\caption{The breadth-first search used to find the closest door, given a source cell.} 
-	\label{fig:bfs}
-\end{figure}
-
-Even though this algorithm finds the path between two cells on the board, the agent actually needs to solve the more general problem of finding the closest doors when departing from multiple source cells. That's because, if the agent is inside a room, there could be multiple exits to choose from, thus, it should find the best option taking into account all these exits.
-
-The na\"{i}ve approach would be to find lists with all the paths for each exit, merge these lists while ordering the elements (paths) by length and, finally, traverse the result. However, that solution is both inefficient and \textit{imperative}, in the sense that it tells the steps to solve the problem, instead of taking advantage of the declarative paradigm.
-
-What happens if the queue in the previous solution is initialized with multiple source cells, instead of just one?
-\begin{itemize}
-    \item when the first element of the queue is inspected, all its adjacent nodes will be enqueued \textbf{after} all the other sources, which are currently on the queue (as long as those adjacent nodes aren't sources themselves);
-    
-    \item when the next element is inspected (another source), once again, all its \textit{not already on the queue} adjacents will also be enqueued;
-    
-    \item after all the sources nodes are inspected first, the next element to be inspected is exactly one step away from one of the sources; actually, all the elements that are exactly one step away from at least one of the sources will be inspected next, and their adjcent nodes will be enqueued;
-    
-    \item by analogy, all the elements that are exactly two steps away from \textbf{at least one} of the sources will be analyzed next, and so on...
-\end{itemize}
-
-Ergo, it's possible to conclude that, just by initializing the queue with the multiple sources, the order in which the elements are inspected still ensures that doors are searched \textit{breadth-first} and, as a consequence, the doors are found in order, from the closest to the farthest, only now the distance applies to any one of the possible sources.
-
-There's one problem though: in the previous algorithm, since there was only one source, the path could be rebuilt implicitly within the backtracking mechanism. The base of the recursion was the door, and the recursive steps would attach one cell to the head of the resulting list, until the caller of the predicate would have the whole path ready. With multiple sources, however, it's necessary to explicitly store, for each cell that is reached, that cell's parent, \textit{i.e.}, the cell \textit{from which} it was reached.
-
-Figure \ref{fig:bfs-ms} shows the new version of the algorithm that includes these changes. Now, the \varname{Seen} set elements are tuples \varname{(Cell, Parent)} that store not only the coordinate of the cells that were already seen, but also their parent (which can be the coordinates of a previously seen cell or \varname{nil} for the source cells). All predicates were updated to handle this new representation.
-
-The auxiliary predicate \predprot{add\_parent}{3} simply receives a list \varname{Nodes} and an element \varname{Parent} and generates a new list with each element \varname{N} of \varname{Nodes} in a tuple \varname{(N, Parent)}.
-
-Finally, the new recursive predicate \predprot{build\_path}{3} is used to explicitly rebuild the path when a door is reached, given the set of seen nodes (and their parents). The predicate inspects the \varname{Head} element using the \varname{Seen} set and generates the \varname{Path} as a list; the base case happens when the parent of \varname{Head} is \varname{nil}, which generates the unitary list; the recursive case adds \varname{Head} to the list and inspects its non-nil parent. Since this predicate is called when a door is found, the path is actually generated in the reverse order, so the resulting list is reversed before being returned to the original caller.
-
-\begin{figure}[H]
-	\centering
-\begin{lstlisting}[style=Prolog-pygsty]
-%% closest_door((Xs, Ys), Room, Path) - starting at <Xs, Ys>, finds
-%% the closest Room door and the Path to it
-unseen_neighbor((X, Y), (Xd, Yd), Seen) :-
-		neighbor((X, Y), (Xd, Yd)),
-		\+ member(((Xd, Yd), _), Seen).
-valid_adjacent((X, Y), (Xd, Yd), Seen) :-
-		unseen_neighbor((X, Y), (Xd, Yd), Seen),
-		is_free((Xd, Yd)).
-add_parent([], _, []).
-add_parent([Node|NodesTail], Parent, [(Node, Parent)|LinkedTail]) :-
-		add_parent(NodesTail, Parent, LinkedTail).
-build_path(Head, Seen, [Head]) :- member((Head, nil), Seen).
-build_path(Head, Seen, [Head|Tail]) :-
-		member((Head, Parent), Seen),
-		build_path(Parent, Seen, Tail).
-closest_door_aux(Room, Path, [Head|_], Seen) :-
-		door(Head, Room),
-		build_path(Head, Seen, InversePath),
-		reverse(InversePath, Path).
-closest_door_aux(Room, Path, [(X, Y)|QTail], Seen) :-
-		% enqueues all non-seen adjacents to which it's possible to move
-		findall((Xd, Yd), valid_adjacent((X, Y), (Xd, Yd), Seen), ValidAdjacents),
-		append(QTail, ValidAdjacents, NewQueue),
-		% stores all adjacent nodes as seen, to cut the search recursion
-		findall((Xa, Ya), unseen_neighbor((X, Y), (Xa, Ya), Seen), Neighbors),
-		add_parent(Neighbors, (X, Y), LinkedNeighbors),
-		append(LinkedNeighbors, Seen, NewSeen),
-		closest_door_aux(Room, Path, NewQueue, NewSeen). % recursive definition
-closest_door((Xs, Ys), Room, Path) :-
-		is_free((Xs, Ys)),
-		closest_door_aux(Room, Path, [(Xs, Ys)], [((Xs, Ys), nil)]).
-closest_door(SourceRoom, TargetRoom, Path) :-
-		valid_rooms(ValidRooms), member(SourceRoom, ValidRooms),
-		findall(Exit, door(Exit, SourceRoom), Exits),
-		add_parent(Exits, nil, LinkedExits),
-		closest_door_aux(TargetRoom, Path, Exits, LinkedExits).
-\end{lstlisting}
-	\caption{The breadth-first search used to find the closest door, given multiple source cells.} 
-	\label{fig:bfs-ms}
 \end{figure}
 
 \section{Making Decisions}
@@ -513,7 +537,7 @@ This section describes how the agent represents knowledge about the game interna
 \subsection{Representing the Game Data}
 \label{sec:data}
 
-The first necessary data to represent internally are the lists of valid rooms, characters and weapons. These (static) lists are initialized with the predicates in Figure \ref{fig:valid-cards} and used throughout the code. For simplicity, no (physical) player name is stored, instead, all players are referenced by their character's name. The list of valid characters is declared in the order that those characters would play, according to the rules. The agent's own character is represented by the dynamic predicate \predprot{my\_char}{1}, that is set once when a match starts.
+The first data that need to be represented internally are the lists of valid rooms, characters and weapons. These (static) lists are initialized with the predicates in Figure \ref{fig:valid-cards} and used throughout the code. For simplicity, no (physical) player name is stored, instead, all players are referenced by their character's name. The list of valid characters is declared in the order that those characters would play, according to the rules. The agent's own character is represented by the dynamic predicate \predprot{my\_char}{1}, that is set once when a match starts.
 
 \begin{figure}[H]
 	\centering
@@ -546,6 +570,9 @@ valid_chars(
 	]
 ).
 
+%% my_char(Char) - Char is the character of this agent.
+:- dynamic my_char/1.
+
 %% valid_weapons(Weapons) - Weapons is the list of valid weapons.
 valid_weapons(
 	[
@@ -557,9 +584,6 @@ valid_weapons(
 		'pistol'
 	]
 ).
-
-%% my_char(Char) - Char is the character of this agent.
-:- dynamic my_char/1.
 \end{lstlisting}
 	\caption{The lists of rooms, characters and weapons in the game; and the current player's char.} 
 	\label{fig:valid-cards}
@@ -594,12 +618,12 @@ unknown_chars(UnknownChars) :-
 		valid_chars(ValidChars),
 		known_chars(KnownChars),
 		subtract(ValidChars, KnownChars, UnknownChars).
-known_rooms(KnownRooms) :- findall(C, shown_room(_, C), KnownRooms).
+known_rooms(KnownRooms) :- findall(R, shown_room(_, R), KnownRooms).
 unknown_rooms(UnknownRooms) :-
 		valid_rooms(ValidRooms),
 		known_rooms(KnownRooms),
 		subtract(ValidRooms, KnownRooms, UnknownRooms).
-known_weapons(KnownWeapons) :- findall(C, shown_weapon(_, C), KnownWeapons).		
+known_weapons(KnownWeapons) :- findall(W, shown_weapon(_, W), KnownWeapons).		
 unknown_weapons(UnknownWeapons) :-
 		valid_weapons(ValidWeapons),
 		known_weapons(KnownWeapons),
@@ -616,6 +640,220 @@ can_accuse(Person, Room, Weapon) :-
 
 \subsection{Picking Actions}
 \label{sec:actions}
+
+The basic three actions a player can take in the game are: moving, making suggestions and making accusations. Based on the game rules, the following definitions and constraints will be used to pick actions:
+
+\begin{definition}[Move]
+A move is defined as changing the current position either by rolling the dice or by using a secret passage -- remember that a player's position can be the name of a room.
+\end{definition}
+
+\begin{definition}[Entered a room]
+\label{def:entered}
+A player is said to have entered a given room this turn if, at the end of her last turn, she was in a free cell or a different room and is now inside said room -- including the case when she was moved there by another player.
+\end{definition}
+
+\begin{definition}[Character and player rank]
+\label{def:rank}
+A character's rank is its position relative to the agent's own character, following the sequence in which the characters must play their turns. The agent's character has rank 0. The next character to the left of the agent's character has rank 1, and so on, until all characters have received a rank.
+
+A player's rank is the rank of the character it controls.
+\end{definition}
+
+\begin{constraint}
+In a single turn, a player can make a move, a suggestion and an accusation, in that relative order, each one at most once per turn.
+\end{constraint}
+
+\begin{constraint}
+A player can only make a suggestion in a given room if she entered that room this turn.
+\end{constraint}
+
+\begin{constraint}
+\label{rest:accusation}
+A player can make an accusation from any position, as long as it's her turn.
+\end{constraint}
+
+These statements describe in a simple way the set of constraints found in different sections of the game rules. In particular, notice that they cover the more complex rules that say that a player cannot re-enter the same room in a single turn and that when a character is referred in a suggestion or accusation, it's moved to the respective room and, in that case, its owner may make a suggestion in that room on her next turn, however, if the referred character was already in the room cited at the suggestion, then no transfer occurred and the ``entered the room'' rule doesn't apply.
+
+Constraint \ref{rest:accusation}, however, was explicitly stated here to choose an interpretation to an ambiguity on the rules:
+\begin{itemize}
+    \item If the instructions are read until the point right before the section ``Making an Accusation'', the sentences \textit{``If no one is able to prove your Suggestion false, you may either end your turn or make an Accusation now.''} and \textit{``You may, if you wish, make a Suggestion followed by an Accusation on the same turn.''} would lead one to conclude that an accusation can only be made \textbf{if} and \textbf{after} a suggestion is made, and more specifically, if that suggestion is not proven false by anyone, with the corollary that the player would have to be inside a room to make an accusation.
+    
+    \item The section ``Making an Accusation'', however, by directly contrasting the act of making a Suggestion and making an Accusation, leads to the interpretation that an Accusation doesn't depend on a suggestion and could be done from any position at any time, as long as it's on the player's turn.
+\end{itemize}
+
+Analyzing the premise of the game and with the intention to make things simpler, the later interpretation is adopted.
+
+By its own nature, the action picking algorithm is quite procedural. First, a very high level description will be given -- it's summarized in Figure \ref{fig:action-pick} -- next, the predicates are explained in details.
+
+The first thing the agent should do, since it can do it from any location, is to verify if there is currently enough information to make an accusation and, if so, pick that action. On all other cases, the agent uses a series of criteria to weight its options and decide how to proceed.
+
+As either moving or making a suggestion requires picking a room, this is the next thing to be decided. Assume that, following Definition \ref{def:entered}, the player just entered a room this turn. If that happens, the current room must have the highest weight in the decision, however, it can't be used immediately, as there's one case when it's not actually a good choice: when the next player has already shown this room on a previous turn. If that player is playing strategically (and it's assumed she is), using this room in a suggestion would bring no new information. If the player is currently inside a room but has not entered that room this turn, then it can't be used and must not be considered by the algorithm.
+
+Based on this reasoning, the algorithm first sorts all rooms by path length from current position (if the player is currently inside a room, it will have the shortest distance and be the first on the list). Next, it traverses this list picking the first room that was not previously shown by the next player. It's highly propable that such a room exists, but, if not, the closest room is picked.
+
+Let \varname{R} be the picked room. If the player is currently at \varname{R}, then a weapon and a character should be picked. If not, the agent should roll the dice and follow the path towards \varname{R}, limited by the rolled number. If, after moving, the player is inside \varname{R}, then the agent proceeds to pick a weapon and a character, otherwise, the turn ends.
+
+Both weapons and characters are picked using the same criteria. As the agent tries to maximize the chance of acquiring new information, the only aspects taken into consideration are if the card was previoulsy seen and who showed it. For each list \varname{\{ValidWeapons, ValidCharacters\}}, it orders the cards descending by the
+rank of the player who showed them (according to Definition \ref{def:rank}). Cards not yet seen receive rank \varname{(maximum player rank + 1)}. By such ordering, the priority of a card to be picked is first the cards not yet seen, then those seen from farthest to closest player. The agent just generates the suggestion using the picked room and the head of both ordered lists and informs it to the user.
+
+After the suggestion is made, the new information acquired, if any, might allow the agent to make an accusation. So, it makes this test once again.
+
+\begin{figure}[H]
+	\centering
+    \begin{algorithm}[H]
+		\small
+		\eIf{can accuse \&$Person$, \&$Room$, \&$Weapon$}{
+			accuse $Person$, $Room$, $Weapon$\;
+		}{
+			$Rooms \leftarrow$ find all pairs ($Room$, $Path$) from current position\;
+			sort $Rooms$ by $Path$ length ascending\;
+			\If{my position $P$ is a room and not entered $P$ this turn}{
+				remove pair from $Rooms$ containing $P$\;
+			}
+			$(Room, Path) \leftarrow$ first element of $Rooms$ whose $Room$ was not shown by next player or the head of $Rooms$, if there's no such element\;
+			\If{not currently in $Room$}{
+				$Steps \leftarrow$ rool dice\;
+				walk $Path$ limited by $Steps$\;
+			}
+			\If{currently in $Room$}{
+				$Weapon \leftarrow$ first of valid weapons, sorted by position of player that showed it, descending\;
+				$Person \leftarrow$ first of valid characters, sorted by position of player that showed it, descending\;
+				suggest $Person$, $Room$, $Weapon$\;
+				\If{can accuse \&$Person$, \&$Room$, \&$Weapon$}{
+					accuse $Person$, $Room$, $Weapon$\;
+				}
+			}
+		}
+	\end{algorithm}
+	\caption{Pseudocode for the action picking process.} 
+	\label{fig:action-pick}
+\end{figure}
+
+The predicate \predprot{char\_rank}{3} (Figure \ref{fig:char-rank}) applies Definition \ref{def:rank} to find a character's rank in relation to any other. Basically, given a reference character \varname{MyChar}, it rotates the list of valid characters (which is already sorted in the order the characters must play their turns) to the left so \varname{MyChar} becomes the first element. Then, the rank is returned as the position of the other char on the list. Notice that the predicate gives 0 for the rank of \varname{MyChar} in relation to itself, and that if a character is not in the list, the maximum rank plus 1 (\textit{i.e.}, the size of the list) is returned.
+
+\begin{figure}[H]
+	\centering
+\begin{lstlisting}[style=Prolog-pygsty]
+%%% Player rank.
+
+%% pivot_split(List, Pivot, Left, Right) - Splits List in two parts:
+%% - Left -> elements before Pivot
+%% - Right -> Pivot plus the elements after it.
+%% If Pivot is not in the list, Left = List and Right = [].
+pivot_split([], _, [], []).
+pivot_split([Pivot|Tail], Pivot, [], [Pivot|Tail]) :- !.
+pivot_split([Head|Tail], Pivot, [Head|Left], Right) :-
+		pivot_split(Tail, Pivot, Left, Right).
+
+%% char_rank(MyChar, Char, Rank) - gives a Rank to Char relative to MyChar,
+%% that's the order in which Char would play, after MyChar, starting from 0.
+char_pos(_, [], Pos, Pos).
+char_pos(Char, [Char|_], Pos, Pos) :- !.
+char_pos(Char, [_|Tail], Cur, Pos) :-
+		Next is Cur + 1,
+		char_pos(Char, Tail, Next, Pos).
+char_rank(MyChar, Char, Rank) :-
+		valid_chars(ValidChars),
+		pivot_split(ValidChars, MyChar, Left, Right),
+		append(Right, Left, Rotated),
+		char_pos(Char, Rotated, 0, Rank).
+\end{lstlisting}
+	\caption{Finding a player rank in relation to another.} 
+	\label{fig:char-rank}
+\end{figure}
+
+\subsubsection{Picking a Room}
+\label{sec:pick-room}
+
+Built-in predicate \predname{findall} will be used on \predname{closest\_door} to generate a list of paths to all reachable rooms. If the agent is currently inside a room, a unitary path to it (containing just the exit cell) will be included in the list, as it should. Nonetheless, if the player was in this same room last turn, she is not allowed to use it now. The predicate \predprot{remove\_if\_not\_entered}{4} (Figure \ref{fig:remove-not-entered}) deals with this case, generating a new list without any path to the current room, if necessary.
+
+\begin{figure}[H]
+	\centering
+\begin{lstlisting}[style=Prolog-pygsty]
+%% remove_if_not_entered(Rooms, MyChar, MyPos, Result) - if i'm in a room and did
+%% not enter it this turn, remove it from the list.
+remove_if_not_entered(Rooms, MyChar, MyPos, Result) :-
+		valid_rooms(ValidRooms), member(MyPos, ValidRooms), % I'm in a room
+		last_position(MyPos, MyChar), % I didn't enter it this turn
+		delete(Rooms, (MyPos, _), Result), !.
+remove_if_not_entered(Rooms, _, _, Rooms).
+\end{lstlisting}
+	\caption{If the current room cannot be used, removes it.} 
+	\label{fig:remove-not-entered}
+\end{figure}
+
+Next, the agent uses predicate \predprot{check\_secret\_passage}{3} (Figure \ref{fig:check-passage}), to check if there's a secret passage from the given position to a target room and, if so, add it to an existing list of paths.
+
+\begin{figure}[H]
+	\centering
+\begin{lstlisting}[style=Prolog-pygsty]
+%% check_secret_passage(Rooms, MyPos, Result) - if there's a secret passage
+%% from position MyPos (a room) to a target room, adds (TargetRoom, 'secret passage')
+%% to the beginning of Rooms (a list of (Room, Path)).
+check_secret_passage(Rooms, MyPos, [(TargetRoom, 'secret passage')|Rooms]) :-
+		passage(MyPos, TargetRoom), !.
+check_secret_passage(Rooms, _, Rooms).
+\end{lstlisting}
+	\caption{Including the secret passage on the list of paths, if there's one.} 
+	\label{fig:check-passage}
+\end{figure}
+
+The list must then be sorted by path length (Figure \ref{fig:sort-rooms}). The relative order of the elements is determined by \predname{room\_compare}. If one of the compared elements is a secret passage, it will be ordered before any other, except when the other element is a unitary path (\textit{i.e.}, contains only the source position, thus requiring zero steps to enter a room). This happens when the agent is currently inside a room (or in the cell right next to a door, but the agent would always have entered a room by reaching such a cell, so that case should never happen).
+
+\begin{figure}[H]
+	\centering
+\begin{lstlisting}[style=Prolog-pygsty]
+%% room_compare(Order, A, B) - unifies Order to the relative order (<, >, =)
+%% between two elements A and B of a room list (Room, Path).
+%% a path in the form of a secret passage is greater than a unitary path, i.e.,
+%% a path that take zero steps to reach the goal (only the source), and less
+%% than any other path. all other paths are compared by length.
+room_compare(>, (_, 'secret passage'), (_, [_])) :- !.
+room_compare(<, (_, 'secret passage'), _) :- !.
+room_compare(Delta, (_, PathA), (_, PathB)) :-
+		length(PathA, LenA), length(PathB, LenB),
+		compare(Delta, LenA, LenB).
+
+%% sort_rooms(Rooms, Sorted) - unifies the list of rooms, sorted by the
+%% order defined on room_compare
+sort_rooms(Rooms, Sorted) :- predsort(room_compare, Rooms, Sorted).
+\end{lstlisting}
+	\caption{Sorting rooms by path lengh, including secret passages.} 
+	\label{fig:sort-rooms}
+\end{figure}
+
+Finally, the last step is to take the first room in the sorted list that was not shown by the next player, or just the first room in the list if this condition cannot be met. Auxiliary predicate \predprot{pick\_room\_not\_shown\_next}{5} is called by \predprot{pick\_room}{2} to solve this problem,, as shown in Figure \ref{fig:pick-room}.
+
+\begin{figure}[H]
+	\centering
+\begin{lstlisting}[style=Prolog-pygsty]
+%% pick_room_not_shown_next(MyChar, Rooms, SeenRooms, Room, Path) - given Rooms, a list of (Room, Path)
+%% sorted by path, picks the first room that was not shown by the next player or the
+%% first element in the list, if no such room exists.
+pick_room_not_shown_next(_, [], SeenRooms, Room, Path) :-
+		append(_, [(Room, Path)], SeenRooms), !. % take the last element of SeenRooms
+pick_room_not_shown_next(_, [(Room, Path)|_], _, Room, Path) :-
+		\+ shown_room(_, Room), !.
+pick_room_not_shown_next(MyChar, [(Room, Path)|_], _, Room, Path) :-
+		shown_room(Char, Room),
+		char_rank(MyChar, Char, Rank),
+		Rank =\= 1, !.
+pick_room_not_shown_next(MyChar, [(R, P)|Tail], SeenRooms, Room, Path) :-
+		pick_room_not_shown_next(MyChar, Tail, [(R, P)|SeenRooms], Room, Path), !.
+
+%% picks a suitable room to be used this turn (could be the room it's currently in)
+pick_room(Room, Path) :-
+		my_char(MyChar),
+		position(MyPos, MyChar),
+		findall((R, P), closest_door(MyPos, R, P), Rooms),
+		remove_if_not_entered(Rooms, MyChar, MyPos, WithoutCurrent),
+		check_secret_passage(WithoutCurrent, MyPos, WithPassage),
+		sort_rooms(WithPassage, Sorted),
+		pick_room_not_shown_next(MyChar, Sorted, [], Room, Path), !.
+\end{lstlisting}
+	\caption{Top level predicate to pick a room.} 
+	\label{fig:pick-room}
+\end{figure}
 
 \section{The Interface}
 \label{sec:interface}

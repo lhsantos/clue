@@ -4,7 +4,7 @@
 
 :- use_module(library(lists)).
 
-%%%%% The static game data.
+%%%%% The game data.
 
 %%% The game map
 % Origin of the map is lower left corner, growing to the right and
@@ -99,7 +99,10 @@ valid_chars(
 	]
 ).
 
-%% position((X, Y), C) - the current position of character C is <X, Y>
+%% my_char(Char) - Char is the character of this agent.
+:- dynamic my_char/1.
+
+%% position((X, Y), C) - the current position of character C is <X, Y>.
 %% here, it's initialized to the start position at the board.
 %% this predicate will be "rewritten" whenever the script's own
 %% character moves or it receives information that another character
@@ -111,6 +114,46 @@ position((14, 0), 'white').
 position((9, 0), 'green').
 position((0, 6), 'peacock').
 position((0, 19), 'plum').
+
+%% last_position((X, Y), C) - the position of character C was <X, Y> last turn.
+%% it'll be updated as the script's own character moves or it receives
+%% information that another character moved.
+:- dynamic last_position/2.
+last_position(nil, 'scarlet').
+last_position(nil, 'mustard').
+last_position(nil, 'white').
+last_position(nil, 'green').
+last_position(nil, 'peacock').
+last_position(nil, 'plum').
+
+%%% The game weapons.
+
+%% valid_weapons(Weapons) - Weapons is the list of valid weapons.
+valid_weapons(
+	[
+		'rope',
+		'pipe',
+		'knife',
+		'wrench',
+		'candlestick',
+		'pistol'
+	]
+).
+
+%%% Acquired information.
+
+%% shown_char(Player, Char) - the player Player (could be myself)
+%% has shown me the card for Char.
+:- dynamic shown_char/2.
+
+%% shown_room(Player, Room) - the player Player (could be myself)
+%% has shown me the card for Room.
+:- dynamic shown_room/2.
+
+%% shown_weapon(Player, Weapon) - the player Player (could be myself)
+%% has shown me the card for Weapon.
+:- dynamic shown_weapon/2.
+
 
 
 %%%%% Movement logic.
@@ -145,8 +188,7 @@ build_path(Head, Seen, [Head|Tail]) :-
 closest_door_aux(Room, Path, [Head|_], Seen) :-
 		door(Head, Room),
 		build_path(Head, Seen, InversePath),
-		reverse(InversePath, Path),
-		print(Path),nl.
+		reverse(InversePath, Path).
 closest_door_aux(Room, Path, [(X, Y)|QTail], Seen) :-
 		% enqueues all non-seen adjacents to which it's possible to move
 		findall((Xd, Yd), valid_adjacent((X, Y), (Xd, Yd), Seen), ValidAdjacents),
@@ -157,7 +199,7 @@ closest_door_aux(Room, Path, [(X, Y)|QTail], Seen) :-
 		append(LinkedNeighbors, Seen, NewSeen),
 		closest_door_aux(Room, Path, NewQueue, NewSeen). % recursive definition
 closest_door((Xs, Ys), Room, Path) :-
-		is_free((Xs, Ys)),
+		%is_free((Xs, Ys)),
 		closest_door_aux(Room, Path, [(Xs, Ys)], [((Xs, Ys), nil)]).
 closest_door(SourceRoom, TargetRoom, Path) :-
 		valid_rooms(ValidRooms), member(SourceRoom, ValidRooms),
@@ -166,34 +208,10 @@ closest_door(SourceRoom, TargetRoom, Path) :-
 		closest_door_aux(TargetRoom, Path, Exits, LinkedExits).
 
 
-%%% The game weapons.
 
-%% valid_weapons(Weapons) - Weapons is the list of valid weapons.
-valid_weapons(
-	[
-		'rope',
-		'pipe',
-		'knife',
-		'wrench',
-		'candlestick',
-		'pistol'
-	]
-).
+%%%%% Decision logic.
 
-%% my_char(Char) - Char is the character of this agent.
-:- dynamic my_char/1.
-
-%% shown_char(Player, Char) - the player Player (could be myself)
-%% has shown me the card for Char.
-:- dynamic shown_char/2.
-
-%% shown_room(Player, Room) - the player Player (could be myself)
-%% has shown me the card for Room.
-:- dynamic shown_room/2.
-
-%% shown_weapon(Player, Weapon) - the player Player (could be myself)
-%% has shown me the card for Weapon.
-:- dynamic shown_weapon/2.
+%%% Accusation
 
 %% the next predicates generate the known and unknown lists
 %% of characters, rooms and weapons, i.e., those whose cards
@@ -203,12 +221,12 @@ unknown_chars(UnknownChars) :-
 		valid_chars(ValidChars),
 		known_chars(KnownChars),
 		subtract(ValidChars, KnownChars, UnknownChars).
-known_rooms(KnownRooms) :- findall(C, shown_room(_, C), KnownRooms).
+known_rooms(KnownRooms) :- findall(R, shown_room(_, R), KnownRooms).
 unknown_rooms(UnknownRooms) :-
 		valid_rooms(ValidRooms),
 		known_rooms(KnownRooms),
 		subtract(ValidRooms, KnownRooms, UnknownRooms).
-known_weapons(KnownWeapons) :- findall(C, shown_weapon(_, C), KnownWeapons).		
+known_weapons(KnownWeapons) :- findall(W, shown_weapon(_, W), KnownWeapons).		
 unknown_weapons(UnknownWeapons) :-
 		valid_weapons(ValidWeapons),
 		known_weapons(KnownWeapons),
@@ -219,3 +237,84 @@ can_accuse(Person, Room, Weapon) :-
 		unknown_rooms([Room]),
 		unknown_weapons([Weapon]).
 
+
+%%% Player rank.
+
+%% pivot_split(List, Pivot, Left, Right) - Splits List in two parts:
+%% - Left -> elements before Pivot
+%% - Right -> Pivot plus the elements after it.
+%% If Pivot is not in the list, Left = List and Right = [].
+pivot_split([], _, [], []).
+pivot_split([Pivot|Tail], Pivot, [], [Pivot|Tail]) :- !.
+pivot_split([Head|Tail], Pivot, [Head|Left], Right) :-
+		pivot_split(Tail, Pivot, Left, Right).
+
+%% char_rank(MyChar, Char, Rank) - gives a Rank to Char relative to MyChar,
+%% that's the order in which Char would play, after MyChar, starting from 0.
+char_pos(_, [], Pos, Pos).
+char_pos(Char, [Char|_], Pos, Pos) :- !.
+char_pos(Char, [_|Tail], Cur, Pos) :-
+		Next is Cur + 1,
+		char_pos(Char, Tail, Next, Pos).
+char_rank(MyChar, Char, Rank) :-
+		valid_chars(ValidChars),
+		pivot_split(ValidChars, MyChar, Left, Right),
+		append(Right, Left, Rotated),
+		char_pos(Char, Rotated, 0, Rank).
+
+
+%%% Room picking
+
+%% remove_if_not_entered(Rooms, MyChar, MyPos, Result) - if i'm in a room and did
+%% not enter it this turn, remove it from the list.
+remove_if_not_entered(Rooms, MyChar, MyPos, Result) :-
+		valid_rooms(ValidRooms), member(MyPos, ValidRooms), % I'm in a room
+		last_position(MyPos, MyChar), % I didn't enter it this turn
+		delete(Rooms, (MyPos, _), Result), !.
+remove_if_not_entered(Rooms, _, _, Rooms).
+
+%% check_secret_passage(Rooms, MyPos, Result) - if there's a secret passage
+%% from position MyPos (a room) to a target room, adds (TargetRoom, 'secret passage')
+%% to the beginning of Rooms (a list of (Room, Path)).
+check_secret_passage(Rooms, MyPos, [(TargetRoom, 'secret passage')|Rooms]) :-
+		passage(MyPos, TargetRoom), !.
+check_secret_passage(Rooms, _, Rooms).
+
+%% room_compare(Order, A, B) - unifies Order to the relative order (<, >, =)
+%% between two elements A and B of a room list (Room, Path).
+%% a path in the form of a secret passage is greater than a unitary path, i.e.,
+%% a path that take zero steps to reach the goal (only the source), and less
+%% than any other path. all other paths are compared by length.
+room_compare(>, (_, 'secret passage'), (_, [_])) :- !.
+room_compare(<, (_, 'secret passage'), _) :- !.
+room_compare(Delta, (_, PathA), (_, PathB)) :-
+		length(PathA, LenA), length(PathB, LenB),
+		compare(Delta, LenA, LenB).
+
+%% sort_rooms(Rooms, Sorted) - unifies the list of rooms, sorted by the
+%% order defined on room_compare
+sort_rooms(Rooms, Sorted) :- predsort(room_compare, Rooms, Sorted).
+
+%% pick_room_not_shown_next(MyChar, Rooms, SeenRooms, Room, Path) - given Rooms, a list of (Room, Path)
+%% sorted by path, picks the first room that was not shown by the next player or the
+%% first element in the list, if no such room exists.
+pick_room_not_shown_next(_, [], SeenRooms, Room, Path) :-
+		append(_, [(Room, Path)], SeenRooms), !. % take the last element of SeenRooms
+pick_room_not_shown_next(_, [(Room, Path)|_], _, Room, Path) :-
+		\+ shown_room(_, Room), !.
+pick_room_not_shown_next(MyChar, [(Room, Path)|_], _, Room, Path) :-
+		shown_room(Char, Room),
+		char_rank(MyChar, Char, Rank),
+		Rank =\= 1, !.
+pick_room_not_shown_next(MyChar, [(R, P)|Tail], SeenRooms, Room, Path) :-
+		pick_room_not_shown_next(MyChar, Tail, [(R, P)|SeenRooms], Room, Path), !.
+
+%% picks a suitable room to be used this turn (could be the room it's currently in)
+pick_room(Room, Path) :-
+		my_char(MyChar),
+		position(MyPos, MyChar),
+		findall((R, P), closest_door(MyPos, R, P), Rooms),
+		remove_if_not_entered(Rooms, MyChar, MyPos, WithoutCurrent),
+		check_secret_passage(WithoutCurrent, MyPos, WithPassage),
+		sort_rooms(WithPassage, Sorted),
+		pick_room_not_shown_next(MyChar, Sorted, [], Room, Path), !.
